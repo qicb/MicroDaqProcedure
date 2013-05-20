@@ -1,0 +1,5 @@
+E:\Work\MicroDaqProcedure\MicroDaqProcedure\bin\Debug\MicroDaqProcedure.dll
+E:\Work\MicroDaqProcedure\MicroDaqProcedure\bin\Debug\MicroDaqProcedure.pdb
+E:\Work\MicroDaqProcedure\MicroDaqProcedure\obj\Debug\ResolveAssemblyReference.cache
+E:\Work\MicroDaqProcedure\MicroDaqProcedure\obj\Debug\MicroDaqProcedure.dll
+E:\Work\MicroDaqProcedure\MicroDaqProcedure\obj\Debug\MicroDaqProcedure.pdb

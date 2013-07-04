@@ -9,7 +9,7 @@ using System.Collections.Generic;
 public class CLRProcedures
 {
     [Microsoft.SqlServer.Server.SqlProcedure]
-    public static void UpdateMeterValue(int ID, int Type, int State, int Quality, Double Value1, double Value2, double Value3)
+    public static void UpdateMeterValue(int ID, int Type, int State, int Quality, Double Value1, double Value2, double Value3, ref int ResultState, ref string RestultMessage)
     {
         Item item = new Item();
         Parameter parameter = new Parameter();
@@ -47,214 +47,248 @@ public class CLRProcedures
 
         if (item.ID < 10000)
         {
-            UpdateTransientData(item, parameter);
+            UpdateTransientData(item, parameter,ref ResultState,ref RestultMessage);
+
+
 
             if (item.Quality == 192)
             {
-                UpdateRemoteControl(item);
+                UpdateRemoteControl(item, ref ResultState, ref RestultMessage);
 
                 if (item.exitInProcessItem && (item.State == 1 || item.State == 4 || item.State == 8))
                 {
-                    UpdateHistoryData(item, parameter);
+                    UpdateHistoryData(item, parameter,ref ResultState,ref RestultMessage);
                 }
             }
         }
 
     }
 
-
     /// <summary>
     /// 更新即时数据
     /// </summary>
     /// <param name="item"></param>
-    public static void UpdateTransientData(Item item, Parameter parameter)
+    public static void UpdateTransientData(Item item, Parameter parameter, ref int ResultState, ref string RestultMessage)
     {
-        bool exitInItems_Value = false;
-        if (Int32.Parse((SqlHelper.ExecuteScalar("SELECT COUNT(1) FROM dbo.Items_Value Where ID=" + item.ID).ToString())) > 0)
+        try
         {
-            exitInItems_Value = true;
-        }
-        if (exitInItems_Value)
-        {
-            string update = @"Update Items_Value Set Type=" + item.Type + ",State=" + item.State + ",Quality=" + item.Quality + ","
-                + "Value1=" + item.Value1 + ",Value2=" + item.Value2 + ",Value3=" + item.Value3 + ",[Time]='" + DateTime.Now.ToString() + "'"
-                + " Where ID=" + item.ID;
-            SqlHelper.ExecuteNonQuery(update);
-        }
-        else
-        {
-            string insert = @"Insert Into Items_Value (ID,Type,State,Quality,Value1,Value2,Value3,Time) Values("
-                + item.ID + "," + item.Type + "," + item.State + "," + item.Quality + "," +
-                +item.Value1 + "," + item.Value2 + "," + item.Value3 + ","
-                + "'" + DateTime.Now.ToString() + "'"
-                + ")";
-            SqlHelper.ExecuteNonQuery(insert);
-        }
+            bool exitInItems_Value = false;
+            if (Int32.Parse((SqlHelper.ExecuteScalar("SELECT COUNT(1) FROM dbo.Items_Value Where ID=" + item.ID).ToString())) > 0)
+            {
+                exitInItems_Value = true;
+            }
+            if (exitInItems_Value)
+            {
+                string update = @"Update Items_Value Set Type=" + item.Type + ",State=" + item.State + ",Quality=" + item.Quality + ","
+                    + "Value1=" + item.Value1 + ",Value2=" + item.Value2 + ",Value3=" + item.Value3 + ",[Time]='" + DateTime.Now.ToString() + "'"
+                    + " Where ID=" + item.ID;
+                SqlHelper.ExecuteNonQuery(update);
+            }
+            else
+            {
+                string insert = @"Insert Into Items_Value (ID,Type,State,Quality,Value1,Value2,Value3,Time) Values("
+                    + item.ID + "," + item.Type + "," + item.State + "," + item.Quality + "," +
+                    +item.Value1 + "," + item.Value2 + "," + item.Value3 + ","
+                    + "'" + DateTime.Now.ToString() + "'"
+                    + ")";
+                SqlHelper.ExecuteNonQuery(insert);
+            }
 
-        if (item.exitInProcessItem && (item.State == 1 || item.State == 8))
+            if (item.exitInProcessItem && (item.State == 1 || item.State == 8))
+            {
+                UpdateAlarm(item, parameter,ref ResultState,ref RestultMessage);
+            }
+        }
+        catch (Exception ex)
         {
-            UpdateAlarm(item, parameter);
+            ResultState += 1;
+            RestultMessage += "UpdateTransientData:" + ex.Message+";";
         }
 
     }
     /// <summary>
     /// 更新受控设备状态
     /// </summary>
-    public static void UpdateRemoteControl(Item item)
+    public static void UpdateRemoteControl(Item item, ref int ResultState, ref string RestultMessage)
     {
-        if ((int.Parse(SqlHelper.ExecuteScalar("Select Count(1) From RemoteControl WHERE slave =" + item.ID).ToString())) > 0)
+        try
         {
-            SqlHelper.ExecuteNonQuery("Update RemoteControl Set remainSecond =" + (int.Parse(Math.Floor(item.Value1).ToString()) & 65535) + ",State=" + item.State + " Where Slave=" + item.ID + "");
+            if ((int.Parse(SqlHelper.ExecuteScalar("Select Count(1) From RemoteControl WHERE slave =" + item.ID).ToString())) > 0)
+            {
+                SqlHelper.ExecuteNonQuery("Update RemoteControl Set remainSecond =" + (int.Parse(Math.Floor(item.Value1).ToString()) & 65535) + ",State=" + item.State + " Where Slave=" + item.ID + "");
+            }
+        }
+        catch (Exception ex)
+        {
+            ResultState += 2;
+            RestultMessage += "UpdateRemoteControl:" + ex.Message+";";
         }
     }
     /// <summary>
     /// 更新报警灯
     /// </summary>
-    public static void UpdateAlarm(Item item, Parameter parameter)
+    public static void UpdateAlarm(Item item, Parameter parameter, ref int ResultState, ref string RestultMessage)
     {
-        object retLastAltet = SqlHelper.ExecuteScalar("SELECT alerttime FROM items_value WHERE id =" + item.ID);
-        DateTime? latsAltet = null;
-        if (retLastAltet != null && retLastAltet.ToString().Trim() != "")
+        try
         {
-            latsAltet = DateTime.Parse(retLastAltet.ToString());
-        }
-        if (latsAltet == null || latsAltet.Value.AddSeconds(parameter.Rate) <= DateTime.Now)
-        {
-            List<string> listSql = new List<string>();
-            //更新报警记录
-            if (parameter.Logic.Trim() == "between")
+            object retLastAltet = SqlHelper.ExecuteScalar("SELECT alerttime FROM items_value WHERE id =" + item.ID);
+            DateTime? latsAltet = null;
+            if (retLastAltet != null && retLastAltet.ToString().Trim() != "")
             {
-                if (item.Value1 < parameter.YellowMin || item.Value1 > parameter.YellowMax)
-                {
-                    string guid = Guid.NewGuid().ToString().Replace("-", "");
-                    string insertAlter = @"INSERT INTO dbo.ProcessItemAlertRecord (id,processItemId,[timestamp],[value],[confirm]) VALUES("
-                        + "'" + guid + "',"
-                        + "'" + parameter.UUID + "',"
-                        + "'" + DateTime.Now.ToString() + "',"
-                        + item.Value1 + ",'未确定'" + ")";
-                    string updateProcess = @"Update dbo.ProcessItem Set alertRecordId='" + guid + "' Where Slave=" + item.ID;
-                    string updateItems = "Update items_value Set alertTime='" + DateTime.Now.ToString() + "' Where ID=" + item.ID;
-
-                    listSql.Add(insertAlter);
-                    listSql.Add(updateProcess);
-                    listSql.Add(updateItems);
-                }
+                latsAltet = DateTime.Parse(retLastAltet.ToString());
             }
-            //计算报警灯状态
-            string updateItemsAlter = "";
-            if (parameter.Logic.Trim() == "between")
+            if (latsAltet == null || latsAltet.Value.AddSeconds(parameter.Rate) <= DateTime.Now)
             {
-                if (item.Value1 > parameter.YellowMin && item.Value1 < parameter.YellowMax)
+                List<string> listSql = new List<string>();
+                //更新报警记录
+                if (parameter.Logic.Trim() == "between")
                 {
-                    updateItemsAlter = "UPDATE items_value SET alert = 4 WHERE id = " + item.ID;
-                }
-                else
-                {
-                    if (item.Value1 < parameter.RedMin || item.Value1 > parameter.RedMax)
+                    if (item.Value1 < parameter.YellowMin || item.Value1 > parameter.YellowMax)
                     {
-                        updateItemsAlter = "UPDATE items_value SET alert = 1 WHERE id = " + item.ID;
+                        string guid = Guid.NewGuid().ToString().Replace("-", "");
+                        string insertAlter = @"INSERT INTO dbo.ProcessItemAlertRecord (id,processItemId,[timestamp],[value],[confirm]) VALUES("
+                            + "'" + guid + "',"
+                            + "'" + parameter.UUID + "',"
+                            + "'" + DateTime.Now.ToString() + "',"
+                            + item.Value1 + ",'未确定'" + ")";
+                        string updateProcess = @"Update dbo.ProcessItem Set alertRecordId='" + guid + "' Where Slave=" + item.ID;
+                        string updateItems = "Update items_value Set alertTime='" + DateTime.Now.ToString() + "' Where ID=" + item.ID;
+
+                        listSql.Add(insertAlter);
+                        listSql.Add(updateProcess);
+                        listSql.Add(updateItems);
+                    }
+                }
+                //计算报警灯状态
+                string updateItemsAlter = "";
+                if (parameter.Logic.Trim() == "between")
+                {
+                    if (item.Value1 > parameter.YellowMin && item.Value1 < parameter.YellowMax)
+                    {
+                        updateItemsAlter = "UPDATE items_value SET alert = 4 WHERE id = " + item.ID;
                     }
                     else
                     {
-                        updateItemsAlter = "UPDATE items_value SET alert = 2 WHERE id = " + item.ID;
+                        if (item.Value1 < parameter.RedMin || item.Value1 > parameter.RedMax)
+                        {
+                            updateItemsAlter = "UPDATE items_value SET alert = 1 WHERE id = " + item.ID;
+                        }
+                        else
+                        {
+                            updateItemsAlter = "UPDATE items_value SET alert = 2 WHERE id = " + item.ID;
+                        }
                     }
                 }
-            }
-            else
-            {
-                updateItemsAlter = "UPDATE items_value SET alert = 4 WHERE id = " + item.ID;
-            }
-            listSql.Add(updateItemsAlter);
+                else
+                {
+                    updateItemsAlter = "UPDATE items_value SET alert = 4 WHERE id = " + item.ID;
+                }
+                listSql.Add(updateItemsAlter);
 
-            SqlHelper.ExecuteSqls(listSql);
+                SqlHelper.ExecuteSqls(listSql);
+            }
+        }
+        catch (Exception ex)
+        {
+            ResultState += 3;
+            RestultMessage += "UpdateAlarm:"+ex.Message+";";
         }
     }
     /// <summary>
     /// 更新历史数据
     /// </summary>
-    public static void UpdateHistoryData(Item item, Parameter parameter)
+    public static void UpdateHistoryData(Item item, Parameter parameter, ref int ResultState, ref string RestultMessage)
     {
-        string nowTime = DateTime.Now.ToString();
-        List<string> listSql = new List<string>();
-
-        int retZZ = Int32.Parse(SqlHelper.ExecuteScalar("Select Count(1) From sysobjects Where name='zz" + parameter.UUID + "' and xtype='U'").ToString());
-        if (retZZ > 0)
+        try
         {
-            object retLastZZ = SqlHelper.ExecuteScalar("SELECT top 1 zztime FROM items_value WHERE id =" + item.ID);
-            DateTime? latsZZ = null;
-            if (retLastZZ != null && retLastZZ.ToString().Trim() != "")
+            string nowTime = DateTime.Now.ToString();
+            List<string> listSql = new List<string>();
+
+            int retZZ = Int32.Parse(SqlHelper.ExecuteScalar("Select Count(1) From sysobjects Where name='zz" + parameter.UUID + "' and xtype='U'").ToString());
+            if (retZZ > 0)
             {
-                latsZZ = DateTime.Parse(retLastZZ.ToString());
-            }
-            if (latsZZ == null || latsZZ.Value.AddSeconds(parameter.Rate) <= DateTime.Now)
-            {
-                #region 获取假数据 Value2
-                if (item.Value1 < parameter.YellowMin || item.Value1 > parameter.YellowMax)
+                object retLastZZ = SqlHelper.ExecuteScalar("SELECT top 1 zztime FROM items_value WHERE id =" + item.ID);
+                DateTime? latsZZ = null;
+                if (retLastZZ != null && retLastZZ.ToString().Trim() != "")
                 {
-                    float yellowMin = parameter.YellowMin;
+                    latsZZ = DateTime.Parse(retLastZZ.ToString());
+                }
+                if (latsZZ == null || latsZZ.Value.AddSeconds(parameter.Rate) <= DateTime.Now)
+                {
+                    #region 获取假数据 Value2
+                    if (item.Value1 < parameter.YellowMin || item.Value1 > parameter.YellowMax)
+                    {
+                        float yellowMin = parameter.YellowMin;
+                        if (item.Type == 32)
+                        {
+                            yellowMin = 0;
+                        }
+                        item.Value2 = float.Parse(((Math.Abs(yellowMin) + Math.Floor((new Random()).Next(1) * (parameter.YellowMax - yellowMin)))).ToString());
+                        parameter.Warning = 1;
+                    }
+                    else
+                    {
+                        item.Value2 = item.Value1;
+                        parameter.Warning = 0;
+                    }
+                    SqlHelper.ExecuteNonQuery("Update Items_Value Set Value2=" + item.Value2 + ",zzTime='" + DateTime.Now.ToString() + "' Where ID=" + item.ID);
+                    #endregion
+
+                    #region 更新ZZ表 和 35分钟数据表
+                    listSql.Clear();
+                    listSql.Add("Insert Into dbo.zz" + parameter.UUID + " (value,value2,timestamp,productionState,flag) Values(" + item.Value1 + "," + item.Value2 + ",'" + nowTime + "'," + parameter.ProductionState + "," + parameter.Warning + ")");
+                    //zzHistory表中存35分钟内的数据，如过timestamp+35Minute>现在的时间,删除掉
+                    listSql.Add("Delete From dbo.zzHistory Where timestamp<'" + (DateTime.Parse(nowTime)).AddMinutes(-35).ToString() + "'");
+                    listSql.Add("INSERT INTO dbo.zzHistory( value ,value2 ,productionState , timestamp , flag , uuid) VALUES (" + item.Value1 + "," + item.Value2 + "," + parameter.ProductionState + ",'" + nowTime + "'," + parameter.Warning + ",'" + parameter.UUID + "')");
+                    SqlHelper.ExecuteSqls(listSql);
+
+                    #endregion
+
+                    #region 更新ZZ汇总数据
                     if (item.Type == 32)
                     {
-                        yellowMin = 0;
-                    }
-                    item.Value2 = float.Parse(((Math.Abs(yellowMin) + Math.Floor((new Random()).Next(1) * (parameter.YellowMax - yellowMin)))).ToString());
-                    parameter.Warning = 1;
-                }
-                else
-                {
-                    item.Value2 = item.Value1;
-                    parameter.Warning = 0;
-                }
-                SqlHelper.ExecuteNonQuery("Update Items_Value Set Value2=" + item.Value2 + ",zzTime='" + DateTime.Now.ToString() + "' Where ID=" + item.ID);
-                #endregion
+                        object UUIDM3 = null;
 
-                #region 更新ZZ表 和 35分钟数据表
-                listSql.Clear();
-                listSql.Add("Insert Into dbo.zz" + parameter.UUID + " (value,value2,timestamp,productionState,flag) Values(" + item.Value1 + "," + item.Value2 + ",'" + nowTime + "'," + parameter.ProductionState + "," + parameter.Warning + ")");
-                //zzHistory表中存35分钟内的数据，如过timestamp+35Minute>现在的时间,删除掉
-                listSql.Add("Delete From dbo.zzHistory Where timestamp<'" + (DateTime.Parse(nowTime)).AddMinutes(-35).ToString() + "'");
-                listSql.Add("INSERT INTO dbo.zzHistory( value ,value2 ,productionState , timestamp , flag , uuid) VALUES (" + item.Value1 + "," + item.Value2 + "," + parameter.ProductionState + ",'" + nowTime + "'," + parameter.Warning + ",'" + parameter.UUID + "')");
-                SqlHelper.ExecuteSqls(listSql);
+                        UUIDM3 = SqlHelper.ExecuteScalar("SELECT TOP 1 id FROM dbo.ProcessItem WHERE slave =" + (item.ID + 30000));
 
-                #endregion
-
-                #region 更新ZZ汇总数据
-                if (item.Type == 32)
-                {
-                    object UUIDM3 = null;
-
-                    UUIDM3 = SqlHelper.ExecuteScalar("SELECT TOP 1 id FROM dbo.ProcessItem WHERE slave =" + (item.ID + 30000));
-
-                    if (UUIDM3 != null && UUIDM3.ToString().Trim() != "")
-                    {
-                        float sumValue1 = 0, sumValue2 = 0;
-                        using (SqlDataReader dr = SqlHelper.ExecuteReader("Select Sum(Value) as SV1,Sum(Value2) as SV2 From dbo.zzHistory Where UUID='" + parameter.UUID + "'"))
+                        if (UUIDM3 != null && UUIDM3.ToString().Trim() != "")
                         {
-                            while (dr.Read())
+                            float sumValue1 = 0, sumValue2 = 0;
+                            using (SqlDataReader dr = SqlHelper.ExecuteReader("Select Sum(Value) as SV1,Sum(Value2) as SV2 From dbo.zzHistory Where UUID='" + parameter.UUID + "'"))
                             {
-                                sumValue1 = dr["SV1"] == null ? 0 : float.Parse(dr["SV1"].ToString());
-                                sumValue2 = dr["SV2"] == null ? 0 : float.Parse(dr["SV2"].ToString());
+                                while (dr.Read())
+                                {
+                                    sumValue1 = dr["SV1"] == null ? 0 : float.Parse(dr["SV1"].ToString());
+                                    sumValue2 = dr["SV2"] == null ? 0 : float.Parse(dr["SV2"].ToString());
+                                }
                             }
-                        }
-                        Item itemM3 = new Item();
-                        itemM3.ID = item.ID + 30000;
-                        itemM3.Type = item.Type;
-                        itemM3.State = item.State;
-                        itemM3.Quality = 192;
-                        itemM3.Value1 = sumValue1;
-                        itemM3.Value2 = sumValue2;
-                        itemM3.Value3 = 0;
-                        itemM3.exitInProcessItem = true;
-                        Parameter parameterM3 = GetParameter(itemM3);
-                        UpdateTransientData(itemM3, parameterM3);
+                            Item itemM3 = new Item();
+                            itemM3.ID = item.ID + 30000;
+                            itemM3.Type = item.Type;
+                            itemM3.State = item.State;
+                            itemM3.Quality = 192;
+                            itemM3.Value1 = sumValue1;
+                            itemM3.Value2 = sumValue2;
+                            itemM3.Value3 = 0;
+                            itemM3.exitInProcessItem = true;
+                            Parameter parameterM3 = GetParameter(itemM3);
 
-                        listSql.Clear();
-                        listSql.Add("Insert Into dbo.zz" + UUIDM3.ToString() + " (value,value2,timestamp,productionState,flag) Values(" + sumValue1 + "," + sumValue2 + ",'" + nowTime.ToString() + "'," + parameter.ProductionState + "," + parameter.Warning + ")");
-                        listSql.Add("Update Items_value Set zzTime='" + nowTime + "' Where ID=" + itemM3.ID);
-                        SqlHelper.ExecuteSqls(listSql);
+                            UpdateTransientData(itemM3, parameterM3,ref ResultState,ref RestultMessage);
+
+                            listSql.Clear();
+                            listSql.Add("Insert Into dbo.zz" + UUIDM3.ToString() + " (value,value2,timestamp,productionState,flag) Values(" + sumValue1 + "," + sumValue2 + ",'" + nowTime.ToString() + "'," + parameter.ProductionState + "," + parameter.Warning + ")");
+                            listSql.Add("Update Items_value Set zzTime='" + nowTime + "' Where ID=" + itemM3.ID);
+                            SqlHelper.ExecuteSqls(listSql);
+                        }
                     }
+                    #endregion
                 }
-                #endregion
             }
+        }
+        catch (Exception ex)
+        {
+            ResultState += 4;
+            RestultMessage += "UpdateHistoryData:"+ex.Message;
         }
     }
     /// <summary>
